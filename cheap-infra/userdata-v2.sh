@@ -77,7 +77,7 @@ echo ""
 
 if [[ "$ROUTE_OUTPUT" == "[]" ]]; then
     aws ec2 create-route --route-table-id $PRIVATE_ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --instance-id ${!INSTANCE_ID}
-    echo "Route created"
+    echo "Route created" # TODO if create command exit with error do the same with replace command 
     echo ""
 
 elif echo "$ROUTE_OUTPUT" | grep -q "blackhole"; then
