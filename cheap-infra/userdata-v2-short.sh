@@ -3,7 +3,7 @@
 # Install packages
 dnf update -y
 dnf install -y iptables-services sed wget jq tar bind-utils amazon-efs-utils
-
+# Instance Metadata
 TOKEN=$(curl --request PUT "http://169.254.169.254/latest/api/token" --header "X-aws-ec2-metadata-token-ttl-seconds: 3600")
 INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id --header "X-aws-ec2-metadata-token: $TOKEN")
 REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region --header "X-aws-ec2-metadata-token: $TOKEN")
@@ -47,7 +47,7 @@ echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 echo "$(swapon -s)"
 # ECS Config
 cat << EOF >> /etc/ecs/ecs.config
-ECS_CLUSTER=${AWS::StackName}
+ECS_CLUSTER=${AWS::StackName}-cluster
 ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=1m
 ECS_CONTAINER_STOP_TIMEOUT=10s
 ECS_ENABLE_TASK_IAM_ROLE=true
@@ -59,7 +59,7 @@ ROUTE_OUTPUT=$(aws ec2 describe-route-tables --route-table-ids $PRIVATE_ROUTE_TA
 echo -e "ROUTE OUTPUT: $ROUTE_OUTPUT\n"
 if [[ "$ROUTE_OUTPUT" == "[]" ]]; then
     aws ec2 create-route --route-table-id $PRIVATE_ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --instance-id ${!INSTANCE_ID}
-    echo -e "Route created\n"
+    echo -e "Route created\n" #TODO if create command exit with error do the same with replace command 
 elif echo "$ROUTE_OUTPUT" | grep -q "blackhole"; then
     aws ec2 replace-route --route-table-id $PRIVATE_ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --instance-id ${!INSTANCE_ID}
     echo -e "Blackhole found. Route replaced\n"

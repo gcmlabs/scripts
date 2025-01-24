@@ -62,7 +62,7 @@ echo ""
 
 # ECS Config
 cat << EOF >> /etc/ecs/ecs.config
-ECS_CLUSTER=${AWS::StackName}
+ECS_CLUSTER=${AWS::StackName}-cluster
 ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=1m
 ECS_CONTAINER_STOP_TIMEOUT=10s
 ECS_ENABLE_TASK_IAM_ROLE=true
