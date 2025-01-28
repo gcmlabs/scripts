@@ -126,9 +126,14 @@ certificatesResolvers:
 
 providers:
   ecs:
-    autoDiscoverClusters: true
+    autoDiscoverClusters: false
+    clusters:
+      - ${AWS::StackName}-cluster
+    healthyTasksOnly: true
+    exposedByDefault: false
+    refreshSeconds: 15
   file:
-    filename: "/etc/traefik/traefik.yml"
+    filename: /etc/traefik/traefik.yml
     watch: true
 
 api:
@@ -150,9 +155,9 @@ entryPoints:
     address: ":443"
 
 log: # ERROR for prod, DEBUG for staging
-  level: DEBUG
-  filePath: "/var/log/traefik"
+  level: ${TraefikLogsLevel}
   noColor: true
+  filePath: "/var/log/traefik"
 EOF
 
 
