@@ -92,6 +92,7 @@ cd /
 if ! [[ -d /traefik/etc ]]; then
     mkdir /traefik/etc
     cat << EOF > /traefik/etc/traefik.yml
+# Last loaded: $(date)
 providers:
   ecs:
     autoDiscoverClusters: false
@@ -124,7 +125,7 @@ log:
   filePath: "/var/log/traefik"
 EOF
 fi
-cat << EOF > /lib/systemd/system/traefik.service
+cat << EOF > /etc/systemd/system/traefik.service
 [Unit]
 Description=traefik service
 After=network-online.target
@@ -227,7 +228,7 @@ EOF
 echo -e "UPDATE PRIVATE DNS\n"
 for i in {0..4}; do
     if [[ $i -eq 0 ]]; then
-        echo -e "Creating record...\n"
+        echo -e "Upserting record...\n"
     fi
     updateDns "$INSTANCE_PRIV_IP" "$PRIV_ZONE_ID" "$PRIVATE_FILTER_NAME" "$PRIVATE_IP_QUERY"
     sleep 2
@@ -236,13 +237,13 @@ for i in {0..4}; do
     --query "ResourceRecordSets[?(Name == '$RECORD_NAME') && (Type == 'A')].ResourceRecords" \
     --output text)
     if echo $RECORD_IPS | grep -q $INSTANCE_PRIV_IP; then
-        echo -e "Record creation successful\n"
+        echo -e "Record upsert successful\n"
         break
     else
         if [[ $i -eq 4 ]]; then
-            echo -e "Record creation failed too many times, aborting\n"
+            echo -e "Record upsert failed too many times, aborting\n"
         else
-            echo -e "Record creation failed, retrying...\n"
+            echo -e "Record upsert failed, retrying...\n"
         fi
     fi
 done

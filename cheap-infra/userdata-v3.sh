@@ -120,6 +120,7 @@ cd /
 if ! [[ -d /traefik/etc ]]; then
     mkdir /traefik/etc
     cat << EOF > /traefik/etc/traefik.yml
+# Last loaded: $(date)
 providers:
   ecs:
     autoDiscoverClusters: false
@@ -157,7 +158,7 @@ log:
 EOF
 fi
 
-cat << EOF > /lib/systemd/system/traefik.service
+cat << EOF > /etc/systemd/system/traefik.service
 [Unit]
 Description=traefik service
 After=network-online.target
@@ -448,7 +449,7 @@ if [[ -z "$ACTUAL_ZONE_ID" ]]; then
 else
     for i in {0..4}; do
         if [[ $i -eq 0 ]]; then
-            echo "Creating record..."
+            echo "Upserting record..."
         fi
         updateDns "$INSTANCE_PUB_IP" "$ACTUAL_ZONE_ID" "$PUBLIC_FILTER_NAME" "$PUBLIC_IP_QUERY"
         sleep 2
@@ -457,13 +458,13 @@ else
         --query "ResourceRecordSets[?(Name == '$RECORD_NAME') && (Type == 'A')].ResourceRecords" \
         --output text)
         if echo $RECORD_IPS | grep -q $INSTANCE_PUB_IP; then
-            echo "Record creation successful."
+            echo "Record upsert successful."
             break
         else
             if [[ $i -eq 4 ]]; then
-                echo "Record creation failed too many times, aborting."
+                echo "Record upsert failed too many times, aborting."
             else
-                echo "Record creation failed, retrying..."
+                echo "Record upsert failed, retrying..."
             fi
         fi
     done
