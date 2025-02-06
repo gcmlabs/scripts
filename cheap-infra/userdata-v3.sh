@@ -118,6 +118,7 @@ cd /
 
 # Create Traefik config if not present in EFS
 if ! [[ -d /traefik/etc ]]; then
+    echo -e "Creating Traefik config\n"
     mkdir /traefik/etc
     cat << EOF > /traefik/etc/traefik.yml
 # Last loaded: $(date)
