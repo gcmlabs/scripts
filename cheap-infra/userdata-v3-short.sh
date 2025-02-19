@@ -125,6 +125,14 @@ log:
   noColor: true
   filePath: "/var/log/traefik"
 EOF
+    cat << EOF > /traefik/etc/ipAllowList-middleware.yml
+http:
+  middlewares:
+    vpc-whitelist:
+      ipAllowList:
+        sourceRange:
+          - ${pVpcCIDR}
+EOF
 fi
 cat << EOF > /etc/systemd/system/traefik.service
 [Unit]

@@ -157,6 +157,15 @@ log:
   noColor: true
   filePath: "/var/log/traefik"
 EOF
+# Middleware configuration to whitelist VPC CIDR for private services
+    cat << EOF > /traefik/etc/ipAllowList-middleware.yml
+http:
+  middlewares:
+    vpc-whitelist:
+      ipAllowList:
+        sourceRange:
+          - ${pVpcCIDR}
+EOF
 fi
 
 cat << EOF > /etc/systemd/system/traefik.service
