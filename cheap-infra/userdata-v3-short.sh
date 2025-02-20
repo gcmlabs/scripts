@@ -37,7 +37,7 @@ echo '${EfsLetsEncrypt} /traefik efs _netdev,noresvport,tls 0 0' >> /etc/fstab
 mount -a
 # Tag volumes
 ROOT_VOLUME_ID=$(aws ec2 describe-volumes --region ${!REGION} --filters Name=attachment.instance-id,Values="${!INSTANCE_ID}" Name=attachment.device,Values=/dev/xvda | jq -r '.Volumes[0].Attachments[0].VolumeId')
-aws ec2 create-tags --resources ${!ROOT_VOLUME_ID} --region ${!REGION} --tags Key=Name,Value=bastion
+aws ec2 create-tags --resources ${!ROOT_VOLUME_ID} --region ${!REGION} --tags Key=Name,Value=asg-cheap
 # Swapfile
 fallocate -l 8G /swapfile
 chmod 600 /swapfile
