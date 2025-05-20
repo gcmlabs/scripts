@@ -103,14 +103,14 @@ fi
 echo "Architecture: ${Architecture}"
 cd /tmp
 if [[ "${Architecture}" == "arm" ]]; then
-    wget -q https://github.com/traefik/traefik/releases/download/v3.2.3/traefik_v3.2.3_linux_arm64.tar.gz
-    tar -xzf traefik_v3.2.3_linux_arm64.tar.gz
+    wget -q https://github.com/traefik/traefik/releases/download/v3.3.7/traefik_v3.3.7_linux_arm64.tar.gz
+    tar -xzf traefik_v3.3.7_linux_arm64.tar.gz
 else
-    wget -q https://github.com/traefik/traefik/releases/download/v3.2.3/traefik_v3.2.3_linux_amd64.tar.gz
-    tar -xzf traefik_v3.2.3_linux_amd64.tar.gz
+    wget -q https://github.com/traefik/traefik/releases/download/v3.3.7/traefik_v3.3.7_linux_amd64.tar.gz
+    tar -xzf traefik_v3.3.7_linux_amd64.tar.gz
 fi
 
-rm traefik_v3.2.3_linux_*
+rm traefik_v3.3.7_linux_*
 mv traefik /usr/bin
 chown root:root /usr/bin/traefik
 chmod 755 /usr/bin/traefik
