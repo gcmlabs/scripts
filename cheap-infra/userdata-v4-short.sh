@@ -102,6 +102,7 @@ entryPoints:
           to: websecure
           scheme: https
           permanent: true
+          priority: 10
   websecure:
     address: ":443"
   dashboard:
