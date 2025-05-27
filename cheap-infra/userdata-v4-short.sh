@@ -105,8 +105,6 @@ entryPoints:
           priority: 10
   websecure:
     address: ":443"
-  dashboard:
-    address: ":8080"
 log:
   level: ${TraefikLogsLevel}
   noColor: true
@@ -120,16 +118,17 @@ http:
         sourceRange:
           - ${pVpcCIDR}
 EOF
-    cat << EOF > /traefik/etc/dashboard-router.yml
+    cat << 'EOF' > /traefik/etc/dashboard-router.yml
 http:
   routers:
     dashboard:
       entryPoints:
-        - dashboard
-      rule: PathPrefix(\`/api\`) || PathPrefix(\`/dashboard\`)
+        - websecure
+      rule: Host(`lb.${AWS::StackName}-${AWS::Region}.${pDomainName}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
       service: api@internal
       middlewares:
         - auth
+      tls: {}
 EOF
 DASHBOARD_PASSWORD=$(aws secretsmanager get-secret-value --secret-id ${DashboardPasswordSecret} --query SecretString --output text)
 DASHBOARD_PASSWORD_HASH=$(openssl passwd -apr1 ${!DASHBOARD_PASSWORD})
@@ -153,6 +152,7 @@ User=root
 Group=root
 Restart=always
 ExecStart=/usr/bin/traefik --configFile=/traefik/etc/traefik.yml
+WatchdogSec=1s
 
 [Install]
 WantedBy=multi-user.target
