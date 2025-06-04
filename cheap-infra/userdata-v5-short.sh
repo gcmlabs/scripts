@@ -1,6 +1,6 @@
 #!/bin/bash
 dnf update -y
-dnf install -y iptables-services sed wget jq tar bind-utils amazon-efs-utils
+dnf install -y iptables-services sed wget jq tar bind-utils amazon-efs-utils amazon-cloudwatch-agent
 TOKEN=$(curl --request PUT "http://169.254.169.254/latest/api/token" --header "X-aws-ec2-metadata-token-ttl-seconds: 3600")
 INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id --header "X-aws-ec2-metadata-token: $TOKEN")
 REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region --header "X-aws-ec2-metadata-token: $TOKEN")
@@ -22,6 +22,8 @@ sed -i 's/IPTABLES_SAVE_ON_RESTART="no"/IPTABLES_SAVE_ON_RESTART="yes"/' /etc/sy
 iptables-save > /etc/sysconfig/iptables
 systemctl start iptables
 systemctl enable iptables
+aws ssm get-parameter --name ${CWAgentConfiguration} | jq -r '.Parameter | .Value' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 mkdir /traefik
 echo '${EfsTraefik} /traefik efs _netdev,noresvport,tls 0 0' >> /etc/fstab
 mount -a

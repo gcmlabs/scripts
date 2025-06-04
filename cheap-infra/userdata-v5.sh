@@ -2,7 +2,7 @@
 
 # Update and install packages
 dnf update -y
-dnf install -y iptables-services sed wget jq tar bind-utils amazon-efs-utils
+dnf install -y iptables-services sed wget jq tar bind-utils amazon-efs-utils amazon-cloudwatch-agent
 
 # Instance Metadata
 TOKEN=$(curl --request PUT "http://169.254.169.254/latest/api/token" --header "X-aws-ec2-metadata-token-ttl-seconds: 3600")
@@ -12,7 +12,7 @@ REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region --head
 # Disable source/destination check
 aws ec2 modify-instance-attribute --instance-id ${!INSTANCE_ID} --no-source-dest-check
 
-# enable IP forwarding and NAT
+# Enable IP forwarding and NAT
 ENI_IDENTIFIER=$(ip -4 addr show device-number-0.0 | grep -oP 'ens[0-9]+' | head -n1)
 
 sysctl -w net.ipv4.ip_forward=1
@@ -21,7 +21,7 @@ sysctl -w net.ipv4.conf.${!ENI_IDENTIFIER}.send_redirects=0
 echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.d/100-custom.conf
 echo 'net.ipv4.conf.${!ENI_IDENTIFIER}.send_redirects=0' >> /etc/sysctl.d/100-custom.conf
 
-# create custom rules to allow NAT
+# Create custom rules to allow NAT
 iptables -t nat -A POSTROUTING -s ${pPrivateSubnet1CIDR} ! -o docker0 -j MASQUERADE
 iptables -t nat -A POSTROUTING -s ${pPrivateSubnet2CIDR} ! -o docker0 -j MASQUERADE
 iptables -I DOCKER-USER -s ${pPrivateSubnet1CIDR} -j ACCEPT
@@ -42,6 +42,12 @@ iptables-save > /etc/sysconfig/iptables
 # Start and enable the iptables service
 systemctl start iptables
 systemctl enable iptables
+
+
+# Amazon CloudWatch Agent configuration
+aws ssm get-parameter --name ${CWAgentConfiguration} | jq -r '.Parameter | .Value' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
 
 # Mount EFS for LetsEncrypt Certificates of Traefik
 mkdir /traefik
