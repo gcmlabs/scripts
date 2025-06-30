@@ -1,19 +1,20 @@
 #!/bin/bash
+### PACKAGES INSTALL
 dnf update -y
 dnf install -y iptables-services sed wget jq tar bind-utils amazon-efs-utils amazon-cloudwatch-agent
+### INSTANCE METADATA
 TOKEN=$(curl --request PUT "http://169.254.169.254/latest/api/token" --header "X-aws-ec2-metadata-token-ttl-seconds: 3600")
 INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id --header "X-aws-ec2-metadata-token: $TOKEN")
 REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region --header "X-aws-ec2-metadata-token: $TOKEN")
+### NAT INSTANCE
 aws ec2 modify-instance-attribute --instance-id ${!INSTANCE_ID} --no-source-dest-check
 ENI_IDENTIFIER=$(ip -4 addr show device-number-0.0 | grep -oP 'ens[0-9]+' | head -n1)
 sysctl -w net.ipv4.ip_forward=1
 sysctl -w net.ipv4.conf.${!ENI_IDENTIFIER}.send_redirects=0
 echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.d/100-custom.conf
 echo 'net.ipv4.conf.${!ENI_IDENTIFIER}.send_redirects=0' >> /etc/sysctl.d/100-custom.conf
-iptables -t nat -A POSTROUTING -s ${pPrivateSubnet1CIDR} ! -o docker0 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s ${pPrivateSubnet2CIDR} ! -o docker0 -j MASQUERADE
-iptables -I DOCKER-USER -s ${pPrivateSubnet1CIDR} -j ACCEPT
-iptables -I DOCKER-USER -s ${pPrivateSubnet2CIDR} -j ACCEPT
+iptables -t nat -A POSTROUTING -s ${pVpcCIDR} ! -o docker0 -j MASQUERADE
+iptables -I DOCKER-USER -s ${pVpcCIDR} -j ACCEPT
 iptables -I DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 iptables -D INPUT $(iptables -L INPUT --line-numbers | grep icmp-host-prohibited | awk '{print $1}')
 iptables -D FORWARD $(iptables -L FORWARD --line-numbers | grep icmp-host-prohibited | awk '{print $1}')
@@ -22,14 +23,20 @@ sed -i 's/IPTABLES_SAVE_ON_RESTART="no"/IPTABLES_SAVE_ON_RESTART="yes"/' /etc/sy
 iptables-save > /etc/sysconfig/iptables
 systemctl start iptables
 systemctl enable iptables
+### CLOUDWATCH AGENT
 aws ssm get-parameter --name ${CWAgentConfiguration} | jq -r '.Parameter | .Value' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+### EFS MOUNTS
 mkdir /traefik
 echo '${EfsTraefik} /traefik efs _netdev,noresvport,tls 0 0' >> /etc/fstab
-mount -a
 mkdir -p /efs/hostkeys
 echo '${EfsSshKeys} /efs/hostkeys efs _netdev,tls,accesspoint=${EfsAccessPointHostKeys} 0 0' >> /etc/fstab
+mkdir /home/ec2-user/efs
+chmod 700 /home/ec2-user/efs
+chown ec2-user:ec2-user /home/ec2-user/efs
+echo '${EfsSshKeys} /home/ec2-user/efs efs _netdev,tls,accesspoint=${EfsAccessPointAuthorizedKeys} 0 0' >> /etc/fstab
 mount -a
+### SSH KEYS SHARING
 if ls /efs/hostkeys/*key* 1> /dev/null 2>&1; then
     echo -e "Host keys found, overwrite current host keys\n"
     cp --preserve=mode,ownership /efs/hostkeys/*key* /etc/ssh/
@@ -37,23 +44,26 @@ else
     echo -e "No SSH keys found in /efs/hostkeys, filling with current host keys\n"
     cp --preserve=mode,ownership /etc/ssh/*key* /efs/hostkeys/
 fi
-mkdir -p /home/ec2-user/.ssh/authorized_keys.d
-echo '${EfsSshKeys} /home/ec2-user/.ssh/authorized_keys.d efs _netdev,tls,accesspoint=${EfsAccessPointAuthorizedKeys} 0 0' >> /etc/fstab
-mount -a
-if [[ -f /home/ec2-user/.ssh/authorized_keys.d/added_keys]]; then
-    echo -e "File /home/ec2-user/.ssh/authorized_keys.d/added_keys already exists"
+sed -i '/^AuthorizedKeysFile.*\.ssh\/authorized_keys/s/$/ efs\/shared_keys/' /etc/ssh/sshd_config
+systemctl restart sshd
+if [[ -f /home/ec2-user/efs/shared_keys ]]; then
+    echo -e "File shared_keys already exists"
 else
-    echo -e "File /home/ec2-user/.ssh/authorized_keys.d/added_keys does not exist, creating it"
-    touch /home/ec2-user/.ssh/authorized_keys.d/added_keys
-    chmod 600 /home/ec2-user/.ssh/authorized_keys.d/added_keys
+    echo -e "File shared_keys does not exist, creating it"
+    touch /home/ec2-user/efs/shared_keys
+    chmod 600 /home/ec2-user/efs/shared_keys
+fi
+### TAG ROOT VOLUME
 ROOT_VOLUME_ID=$(aws ec2 describe-volumes --region ${!REGION} --filters Name=attachment.instance-id,Values="${!INSTANCE_ID}" Name=attachment.device,Values=/dev/xvda | jq -r '.Volumes[0].Attachments[0].VolumeId')
 aws ec2 create-tags --resources ${!ROOT_VOLUME_ID} --region ${!REGION} --tags Key=Name,Value=asg-cheap
+### SWAPFILE
 fallocate -l 8G /swapfile
 chmod 600 /swapfile
 mkswap /swapfile
 swapon /swapfile
 echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 echo "$(swapon -s)"
+### ECS AGENT
 cat << EOF >> /etc/ecs/ecs.config
 ECS_CLUSTER=${AWS::StackName}-cluster
 ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=1m
@@ -61,6 +71,7 @@ ECS_CONTAINER_STOP_TIMEOUT=10s
 ECS_ENABLE_TASK_IAM_ROLE=true
 ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST=true
 EOF
+### NAT ROUTE
 PRIVATE_ROUTE_TABLE=${PrivateRouteTable}
 ROUTE_OUTPUT=$(aws ec2 describe-route-tables --route-table-ids $PRIVATE_ROUTE_TABLE --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0']" --output json)
 echo -e "ROUTE OUTPUT: $ROUTE_OUTPUT\n"
@@ -80,99 +91,102 @@ else
     echo -e "Route is healthy\n"
     fi
 fi
+### EXECUTE TRAEFIK CONFIG SCRIPT
 aws ssm get-parameter --name ${TraefikConfigScript} | jq -r '.Parameter | .Value' > /tmp/traefik-config.sh
 chmod +x /tmp/traefik-config.sh
 bash /tmp/traefik-config.sh
-# echo -e "Architecture: ${Architecture}\n"
-# cd /tmp
-# if [[ "${Architecture}" == "arm" ]]; then
-#     wget -q https://github.com/traefik/traefik/releases/download/v3.3.7/traefik_v3.3.7_linux_arm64.tar.gz
-#     tar -xzf traefik_v3.3.7_linux_arm64.tar.gz
-# else
-#     wget -q https://github.com/traefik/traefik/releases/download/v3.3.7/traefik_v3.3.7_linux_amd64.tar.gz
-#     tar -xzf traefik_v3.3.7_linux_amd64.tar.gz
-# fi
-# rm traefik_v3.3.7_linux_*
-# mv traefik /usr/bin
-# chown root:root /usr/bin/traefik
-# chmod 755 /usr/bin/traefik
-# cd /
-# if ! [[ -d /traefik/etc ]]; then
-#     echo -e "Creating Traefik config\n"
-#     mkdir /traefik/etc
-#     cat << EOF > /traefik/etc/traefik.yml
-# # Last loaded: $(date)
-# providers:
-#   ecs:
-#     autoDiscoverClusters: false
-#     clusters:
-#       - ${AWS::StackName}-cluster
-#     healthyTasksOnly: true
-#     exposedByDefault: false
-#     refreshSeconds: 15
-#   file:
-#     directory: /traefik/etc
-#     watch: true
-# api:
-#   dashboard: true
-#   insecure: false
-#   debug: false
-# entryPoints:
-#   web:
-#     address: ":80"
-#     http:
-#       redirections:
-#         entryPoint:
-#           to: websecure
-#           scheme: https
-#           permanent: true
-#           priority: 10
-#   websecure:
-#     address: ":443"
-# log:
-#   level: ${TraefikLogsLevel}
-#   noColor: true
-#   filePath: "/var/log/traefik"
-# EOF
-#     cat << EOF > /traefik/etc/ipAllowList-middleware.yml
-# http:
-#   middlewares:
-#     vpc-whitelist:
-#       ipAllowList:
-#         sourceRange:
-#           - ${pVpcCIDR}
-# EOF
-#     cat << 'EOF' > /traefik/etc/dashboard-router.yml
-# http:
-#   routers:
-#     dashboard:
-#       entryPoints:
-#         - websecure
-#       rule: Host(`lb.${AWS::StackName}-${AWS::Region}.${pDomainName}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
-#       service: api@internal
-#       middlewares:
-#         - vpc-whitelist
-#       tls: {}
-# EOF
-# fi
-# cat << EOF > /etc/systemd/system/traefik.service
-# [Unit]
-# Description=traefik service
-# After=network-online.target
+### TRAEFIK CONFIG
+echo -e "Architecture: ${Architecture}\n"
+cd /tmp
+if [[ "${Architecture}" == "arm" ]]; then
+    wget -q https://github.com/traefik/traefik/releases/download/v3.4.1/traefik_v3.4.1_linux_arm64.tar.gz
+    tar -xzf traefik_v3.4.1_linux_arm64.tar.gz
+else
+    wget -q https://github.com/traefik/traefik/releases/download/v3.4.1/traefik_v3.4.1_linux_amd64.tar.gz
+    tar -xzf traefik_v3.4.1_linux_amd64.tar.gz
+fi
+rm traefik_v3.4.1_linux_*
+mv traefik /usr/bin
+chown root:root /usr/bin/traefik
+chmod 755 /usr/bin/traefik
+cd /
+if ! [[ -d /traefik/etc ]]; then
+    echo -e "Creating Traefik config\n"
+    mkdir /traefik/etc
+    cat << EOF > /traefik/etc/traefik.yml
+# Last loaded: $(date)
+providers:
+  ecs:
+    autoDiscoverClusters: false
+    clusters:
+      - ${AWS::StackName}-cluster
+    healthyTasksOnly: true
+    exposedByDefault: false
+    refreshSeconds: 15
+  file:
+    directory: /traefik/etc
+    watch: true
+api:
+  dashboard: true
+  insecure: false
+  debug: false
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+          priority: 10
+  websecure:
+    address: ":443"
+log:
+  level: ${TraefikLogsLevel}
+  noColor: true
+  filePath: "/var/log/traefik"
+EOF
+    cat << EOF > /traefik/etc/ipAllowList-middleware.yml
+http:
+  middlewares:
+    vpc-whitelist:
+      ipAllowList:
+        sourceRange:
+          - ${pVpcCIDR}
+EOF
+    cat << 'EOF' > /traefik/etc/dashboard-router.yml
+http:
+  routers:
+    dashboard:
+      entryPoints:
+        - websecure
+      rule: Host(`lb.${AWS::StackName}-${AWS::Region}.${pDomainName}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
+      service: api@internal
+      middlewares:
+        - vpc-whitelist
+      tls: {}
+EOF
+fi
+cat << EOF > /etc/systemd/system/traefik.service
+[Unit]
+Description=traefik service
+After=network-online.target
 
-# [Service]
-# Type=notify
-# User=root
-# Group=root
-# Restart=always
-# ExecStart=/usr/bin/traefik --configFile=/traefik/etc/traefik.yml
-# WatchdogSec=1s
+[Service]
+Type=notify
+User=root
+Group=root
+Restart=always
+ExecStart=/usr/bin/traefik --configFile=/traefik/etc/traefik.yml
+WatchdogSec=1s
 
-# [Install]
-# WantedBy=multi-user.target
-# EOF
-# systemctl enable traefik
-# systemctl start traefik
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable traefik
+systemctl start traefik
+### DNS
 PRIV_ZONE_ID=${PrivateHostedZone}
 RECORD_NAME="lb.${AWS::StackName}-${AWS::Region}.${pDomainName}."
 ASG_NAME=${AWS::StackName}-asg
@@ -344,4 +358,5 @@ else
         fi
     done
 fi
+### TAG INIT COMPLETE
 aws ec2 create-tags --resources $INSTANCE_ID --tags Key=Init,Value=Complete

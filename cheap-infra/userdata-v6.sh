@@ -22,10 +22,8 @@ echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.d/100-custom.conf
 echo 'net.ipv4.conf.${!ENI_IDENTIFIER}.send_redirects=0' >> /etc/sysctl.d/100-custom.conf
 
 # Create custom rules to allow NAT
-iptables -t nat -A POSTROUTING -s ${pPrivateSubnet1CIDR} ! -o docker0 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s ${pPrivateSubnet2CIDR} ! -o docker0 -j MASQUERADE
-iptables -I DOCKER-USER -s ${pPrivateSubnet1CIDR} -j ACCEPT
-iptables -I DOCKER-USER -s ${pPrivateSubnet2CIDR} -j ACCEPT
+iptables -t nat -A POSTROUTING -s ${pVpcCIDR} ! -o docker0 -j MASQUERADE
+iptables -I DOCKER-USER -s ${pVpcCIDR} -j ACCEPT
 iptables -I DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 
 # Allow ICMP based traffic
@@ -50,12 +48,19 @@ aws ssm get-parameter --name ${CWAgentConfiguration} | jq -r '.Parameter | .Valu
 # Mount EFS for LetsEncrypt Certificates of Traefik
 mkdir /traefik
 echo '${EfsTraefik} /traefik efs _netdev,noresvport,tls 0 0' >> /etc/fstab
-mount -a
 
 # Mount EFS Access Points for SSH keys sharing
 mkdir -p /efs/hostkeys
 echo '${EfsSshKeys} /efs/hostkeys efs _netdev,tls,accesspoint=${EfsAccessPointHostKeys} 0 0' >> /etc/fstab
+mkdir /home/ec2-user/efs
+chmod 700 /home/ec2-user/efs
+chown ec2-user:ec2-user /home/ec2-user/efs
+echo '${EfsSshKeys} /home/ec2-user/efs efs _netdev,tls,accesspoint=${EfsAccessPointAuthorizedKeys} 0 0' >> /etc/fstab
+
+# Mount every EFS defined in fstab
 mount -a
+
+# Check if Host keys exist in EFS and copy them to /etc/ssh or overwrite them if they already exist in EFS
 if ls /efs/hostkeys/*key* 1> /dev/null 2>&1; then
     echo -e "Host keys found, overwrite current host keys\n"
     cp --preserve=mode,ownership /efs/hostkeys/*key* /etc/ssh/
@@ -63,15 +68,19 @@ else
     echo -e "No SSH keys found in /efs/hostkeys, filling with current host keys\n"
     cp --preserve=mode,ownership /etc/ssh/*key* /efs/hostkeys/
 fi
-mkdir -p /home/ec2-user/.ssh/authorized_keys.d
-echo '${EfsSshKeys} /home/ec2-user/.ssh/authorized_keys.d efs _netdev,tls,accesspoint=${EfsAccessPointAuthorizedKeys} 0 0' >> /etc/fstab
-mount -a
-if [[ -f /home/ec2-user/.ssh/authorized_keys.d/added_keys]]; then
-    echo -e "File /home/ec2-user/.ssh/authorized_keys.d/added_keys already exists"
+
+# Configure SSH agent to use the shared keys file to authenticate users
+sed -i '/^AuthorizedKeysFile.*\.ssh\/authorized_keys/s/$/ efs\/shared_keys/' /etc/ssh/sshd_config
+systemctl restart sshd
+
+# Check if the shared SSH keys file exists or create it
+if [[ -f /home/ec2-user/efs/shared_keys ]]; then
+    echo -e "File shared_keys already exists"
 else
-    echo -e "File /home/ec2-user/.ssh/authorized_keys.d/added_keys does not exist, creating it"
-    touch /home/ec2-user/.ssh/authorized_keys.d/added_keys
-    chmod 600 /home/ec2-user/.ssh/authorized_keys.d/added_keys
+    echo -e "File shared_keys does not exist, creating it"
+    touch /home/ec2-user/efs/shared_keys
+    chmod 600 /home/ec2-user/efs/shared_keys
+fi
 
 # Tag volumes
 ROOT_VOLUME_ID=$(aws ec2 describe-volumes --region ${!REGION} --filters Name=attachment.instance-id,Values="${!INSTANCE_ID}" Name=attachment.device,Values=/dev/xvda | jq -r '.Volumes[0].Attachments[0].VolumeId')
@@ -121,109 +130,106 @@ aws ssm get-parameter --name ${TraefikConfigScript} | jq -r '.Parameter | .Value
 chmod +x /tmp/traefik-config.sh
 bash /tmp/traefik-config.sh
 
-# # Traefik Install and Config based on architecture
-# echo -e "Architecture: ${Architecture}\n"
-# cd /tmp
-# if [[ "${Architecture}" == "arm" ]]; then
-#     wget -q https://github.com/traefik/traefik/releases/download/v3.3.7/traefik_v3.3.7_linux_arm64.tar.gz
-#     tar -xzf traefik_v3.3.7_linux_arm64.tar.gz
-# else
-#     wget -q https://github.com/traefik/traefik/releases/download/v3.3.7/traefik_v3.3.7_linux_amd64.tar.gz
-#     tar -xzf traefik_v3.3.7_linux_amd64.tar.gz
-# fi
+# Traefik Install and Config based on architecture
+echo -e "Architecture: ${Architecture}\n"
+cd /tmp
+if [[ "${Architecture}" == "arm" ]]; then
+    wget -q https://github.com/traefik/traefik/releases/download/v3.4.1/traefik_v3.4.1_linux_arm64.tar.gz
+    tar -xzf traefik_v3.4.1_linux_arm64.tar.gz
+else
+    wget -q https://github.com/traefik/traefik/releases/download/v3.4.1/traefik_v3.4.1_linux_amd64.tar.gz
+    tar -xzf traefik_v3.4.1_linux_amd64.tar.gz
+fi
 
-# rm traefik_v3.3.7_linux_*
-# mv traefik /usr/bin
-# chown root:root /usr/bin/traefik
-# chmod 755 /usr/bin/traefik
-# cd /
+rm traefik_v3.4.1_linux_*
+mv traefik /usr/bin
+chown root:root /usr/bin/traefik
+chmod 755 /usr/bin/traefik
+cd /
 
-# # Create Traefik config if not present in EFS
-# if ! [[ -d /traefik/etc ]]; then
-#     echo -e "Creating Traefik config\n"
-#     mkdir /traefik/etc
-#     cat << EOF > /traefik/etc/traefik.yml
-# # Last loaded: $(date)
-# providers:
-#   ecs:
-#     autoDiscoverClusters: false
-#     clusters:
-#       - ${AWS::StackName}-cluster
-#     healthyTasksOnly: true
-#     exposedByDefault: false
-#     refreshSeconds: 15
-#   file:
-#     directory: /traefik/etc
-#     watch: true
+# Create Traefik config if not present in EFS
+if ! [[ -d /traefik/etc ]]; then
+    echo -e "Creating Traefik config\n"
+    mkdir /traefik/etc
+    cat << EOF > /traefik/etc/traefik.yml
+# Last loaded: $(date)
+providers:
+  ecs:
+    autoDiscoverClusters: false
+    clusters:
+      - ${AWS::StackName}-cluster
+    healthyTasksOnly: true
+    exposedByDefault: false
+    refreshSeconds: 15
+  file:
+    directory: /traefik/etc
+    watch: true
+api:
+  dashboard: true
+  insecure: false
+  debug: false
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+          priority: 10
+  websecure:
+    address: ":443"
+log:
+  level: ${TraefikLogsLevel}
+  noColor: true
+  filePath: "/var/log/traefik"
+EOF
 
-# api:
-#   dashboard: true
-#   insecure: false
-#   debug: false
+# Middleware configuration to whitelist VPC CIDR for private services
+    cat << EOF > /traefik/etc/ipAllowList-middleware.yml
+http:
+  middlewares:
+    vpc-whitelist:
+      ipAllowList:
+        sourceRange:
+          - ${pVpcCIDR}
+EOF
 
-# entryPoints:
-#   web:
-#     address: ":80"
-#     http:
-#       redirections:
-#         entryPoint:
-#           to: websecure
-#           scheme: https
-#           permanent: true
-#           priority: 10
+# Router configuration for Traefik dashboard
+    cat << 'EOF' > /traefik/etc/dashboard-router.yml
+http:
+  routers:
+    dashboard:
+      entryPoints:
+        - websecure
+      rule: Host(`lb.${AWS::StackName}-${AWS::Region}.${pDomainName}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
+      service: api@internal
+      middlewares:
+        - vpc-whitelist
+      tls: {}
+EOF
+fi
 
-#   websecure:
-#     address: ":443"
-# log:
-#   level: ${TraefikLogsLevel}
-#   noColor: true
-#   filePath: "/var/log/traefik"
-# EOF
+cat << EOF > /etc/systemd/system/traefik.service
+[Unit]
+Description=traefik service
+After=network-online.target
 
-# # Middleware configuration to whitelist VPC CIDR for private services
-#     cat << EOF > /traefik/etc/ipAllowList-middleware.yml
-# http:
-#   middlewares:
-#     vpc-whitelist:
-#       ipAllowList:
-#         sourceRange:
-#           - ${pVpcCIDR}
-# EOF
+[Service]
+Type=notify
+User=root
+Group=root
+Restart=always
+ExecStart=/usr/bin/traefik --configFile=/traefik/etc/traefik.yml
+WatchdogSec=1s
 
-# # Router configuration for Traefik dashboard
-#     cat << 'EOF' > /traefik/etc/dashboard-router.yml
-# http:
-#   routers:
-#     dashboard:
-#       entryPoints:
-#         - websecure
-#       rule: Host(`lb.${AWS::StackName}-${AWS::Region}.${pDomainName}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
-#       service: api@internal
-#       middlewares:
-#         - vpc-whitelist
-#       tls: {}
-# EOF
-# fi
+[Install]
+WantedBy=multi-user.target
+EOF
 
-# cat << EOF > /etc/systemd/system/traefik.service
-# [Unit]
-# Description=traefik service
-# After=network-online.target
-
-# [Service]
-# Type=notify
-# User=root
-# Group=root
-# Restart=always
-# ExecStart=/usr/bin/traefik --configFile=/traefik/etc/traefik.yml
-# WatchdogSec=1s
-
-# [Install]
-# WantedBy=multi-user.target
-# EOF
-
-# systemctl enable traefik
-# systemctl start traefik
+systemctl enable traefik
+systemctl start traefik
 
 
 ### DNS CONFIGURATION ###

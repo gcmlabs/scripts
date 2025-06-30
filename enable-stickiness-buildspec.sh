@@ -2,6 +2,8 @@
 # Script in the buildspec that enables stickiness and a scheduled rule
 # to invoke a lambda after 1 hour to disable stickiness again
 
+SCHEDULED_RULE_NAME=$(echo "$SCHEDULED_RULE_ARN" | sed 's/.*\///')
+
 # Enable the stickiness and check if it was successful
 STICKINESS_ENABLED=false
 while [[ "$STICKINESS_ENABLED" == "false" ]]; do
@@ -15,7 +17,7 @@ while [[ "$STICKINESS_ENABLED" == "false" ]]; do
         aws events tag-resource \
             --resource-arn "$SCHEDULED_RULE_ARN" \
             --tags Key=EnableTimestamp,Value="$(date +%s)"
-        echo -e "Stickiness enabled successfully, proceeding to disable the scheduled rule.\n"
+        echo -e "Stickiness enabled successfully, proceeding to enable the scheduled rule.\n"
     else
         echo -e "Stickiness not enabled yet, retrying...\n"
     fi

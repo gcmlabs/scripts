@@ -1,12 +1,13 @@
 #!/bin/bash
 
+export AWS_PROFILE="terraform-relab-development"
+SCHEDULED_RULE_ARN="arn:aws:events:eu-central-1:825765388720:rule/monolith-dev-stickiness"
+TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:eu-central-1:825765388720:targetgroup/bancone-monolith-dev/f856fad7348ce8e9"
+
 # Script in the buildspec that enables stickiness and a scheduled rule
 # to invoke a lambda after 1 hour to disable stickiness again
 
-SCHEDULED_RULE_NAME="test-jack-stickiness-scheduled-rule"
-SCHEDULED_RULE_ARN="arn:aws:events:eu-central-1:861507897222:rule/$SCHEDULED_RULE_NAME"
-TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:eu-central-1:861507897222:targetgroup/test-jack/91e8eff8c836fff9"
-export AWS_PROFILE="sandbox"
+SCHEDULED_RULE_NAME=$(echo "$SCHEDULED_RULE_ARN" | sed 's/.*\///')
 
 # Enable the stickiness and check if it was successful
 STICKINESS_ENABLED=false
@@ -21,7 +22,7 @@ while [[ "$STICKINESS_ENABLED" == "false" ]]; do
         aws events tag-resource \
             --resource-arn "$SCHEDULED_RULE_ARN" \
             --tags Key=EnableTimestamp,Value="$(date +%s)"
-        echo -e "Stickiness enabled successfully, proceeding to disable the scheduled rule.\n"
+        echo -e "Stickiness enabled successfully, proceeding to enable the scheduled rule.\n"
     else
         echo -e "Stickiness not enabled yet, retrying...\n"
     fi
