@@ -33,7 +33,7 @@ systemctl restart ssh
 groupadd sftp-users
 
 echo "Match Group sftp-users
-ForceCommand internal-sftp
+ForceCommand internal-sftp -d /uploads
 PasswordAuthentication yes
 ChrootDirectory /sftp/%u
 PermitTunnel no
@@ -93,3 +93,62 @@ fs-0c866a9dca3c276c9 /sftp/wordpress efs _netdev,tls,accesspoint=fsap-0e6d75e3c8
 
 
 
+
+### SCRIPT PER CREAZIONE USER SFTP CON DIRECTORY DEDICATA E KEY AUTH
+
+#!/bin/bash
+
+dnf update -y
+dnf install -y amazon-efs-utils
+
+mkdir -p /sftp
+echo "fs-0163b7f099984fc15:/ /sftp efs _netdev,noresvport,tls,iam 0 0" >> /etc/fstab
+mount -a
+
+mkdir -p /root/scripts
+
+echo '#!/bin/bash
+
+# Usage: ./create-sftp-user.sh username client_cidr "public_key"
+
+if [ "$#" -ne 3 ]; then
+  echo "Usage: <username> <client_cidr> \"<public_key>\"" >&2
+  exit 1
+fi
+
+USER_NAME="$1"
+CLIENT_CIDR="$2"
+PUBKEY="$3"
+
+if id -u "$USER_NAME" > /dev/null 2>&1; then
+  echo "User $USER_NAME already exists"
+  exit 1
+fi
+
+useradd -s /usr/sbin/nologin $USER_NAME
+
+mkdir -p /home/$USER_NAME/.ssh
+echo $PUBKEY > /home/$USER_NAME/.ssh/authorized_keys
+chown -R $USER_NAME:$USER_NAME /home/$USER_NAME/.ssh
+chmod 700 /home/$USER_NAME/.ssh
+chmod 600 /home/$USER_NAME/.ssh/authorized_keys
+
+mkdir -p /sftp/$USER_NAME
+mkdir -p /sftp/$USER_NAME/uploads
+chown -R $USER_NAME:$USER_NAME /sftp/$USER_NAME/uploads
+chmod 755 /sftp/$USER_NAME/uploads
+
+echo "Match User $USER_NAME
+AllowUsers $USER_NAME@$CLIENT_CIDR
+ForceCommand internal-sftp -d /uploads
+PasswordAuthentication no
+ChrootDirectory /sftp/%u
+PermitTunnel no
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no" > /etc/ssh/sshd_config.d/$USER_NAME.conf
+
+sshd -t
+systemctl restart sshd' > /root/scripts/create-sftp-user
+
+chmod +x /root/scripts/create-sftp-user
