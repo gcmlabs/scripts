@@ -128,7 +128,7 @@ fi
 useradd -s /usr/sbin/nologin $USER_NAME
 
 mkdir -p /home/$USER_NAME/.ssh
-echo $PUBKEY > /home/$USER_NAME/.ssh/authorized_keys
+echo "$PUBKEY" > /home/$USER_NAME/.ssh/authorized_keys
 chown -R $USER_NAME:$USER_NAME /home/$USER_NAME/.ssh
 chmod 700 /home/$USER_NAME/.ssh
 chmod 600 /home/$USER_NAME/.ssh/authorized_keys
@@ -149,6 +149,6 @@ AllowTcpForwarding no
 X11Forwarding no" > /etc/ssh/sshd_config.d/$USER_NAME.conf
 
 sshd -t
-systemctl restart sshd' > /root/scripts/create-sftp-user
+systemctl reload sshd' > /root/scripts/create-sftp-user
 
 chmod +x /root/scripts/create-sftp-user
